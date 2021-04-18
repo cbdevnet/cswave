@@ -8,8 +8,72 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <math.h>
 
-#define PRIsize_t "lu"
+#ifdef _WIN32
+	#define WIN32_LEAN_AND_MEAN
+	#include <windows.h>
+	#include <winsock2.h>
+	#define PRIsize_t "Iu"
+	#define htole16(x) (x)
+	#define htole32(x) (x)
+#define GETLINE_BUFFER 4096
+
+//getline implementation from midimonster / https://github.com/cbdevnet/midimonster
+static ssize_t getline(char** line, size_t* alloc, FILE* stream){
+	size_t bytes_read = 0;
+	char c;
+	//sanity checks
+	if(!line || !alloc || !stream){
+		return -1;
+	}
+
+	//allocate buffer if none provided
+	if(!*line || !*alloc){
+		*alloc = GETLINE_BUFFER;
+		*line = calloc(GETLINE_BUFFER, sizeof(char));
+		if(!*line){
+			fprintf(stderr, "Failed to allocate memory\n");
+			return -1;
+		}
+	}
+
+	if(feof(stream)){
+		return -1;
+	}
+
+	for(c = fgetc(stream); 1; c = fgetc(stream)){
+		//end of buffer, resize
+		if(bytes_read == (*alloc) - 1){
+			*alloc += GETLINE_BUFFER;
+			*line = realloc(*line, (*alloc) * sizeof(char));
+			if(!*line){
+				fprintf(stderr, "Failed to allocate memory\n");
+				return -1;
+			}
+		}
+
+		//store character
+		(*line)[bytes_read] = c;
+
+		//end of line
+		if(feof(stream) || c == '\n'){
+			//terminate string
+			(*line)[bytes_read + 1] = 0;
+			return bytes_read;
+		}
+
+		//input broken
+		if(ferror(stream)){
+			return -1;
+		}
+
+		bytes_read++;
+	}
+}
+#else
+	#define PRIsize_t "lu"
+#endif
 
 typedef enum {
 	fmt_i8,
@@ -152,6 +216,25 @@ static size_t process(FILE* src, size_t column, sample_format fmt, int dst){
 	return samples;
 }
 
+static float* float_reference(int fd, size_t samples){
+	float* data = calloc(samples, sizeof(float)), max = 0;
+	size_t n = 0;
+
+	for(n = 0; n < samples; n++){
+		read(fd, data + n, 4);
+		if(fabsf(data[n]) > fabsf(max)){
+			max = data[n];
+		}
+	}
+
+	fprintf(stdout, "Determined maximum sample value as %f\n", max);
+
+	for(n = 0; n < samples; n++){
+		data[n] /= fabsf(max);
+	}
+	return data;
+}
+
 static void write_headers(int fd, sample_format fmt, size_t samples, size_t samplerate){
 	hdr_riff_t riff_hdr = {
 		.magic_riff = "RIFF",
@@ -208,7 +291,7 @@ int main(int argc, char** argv){
 		return EXIT_FAILURE;
 	}
 
-	int output_fd = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+	int output_fd = open(argv[2], O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 	if(output_fd < 0){
 		fprintf(stderr, "Failed to open output file %s\n", argv[2]);
 		close(output_fd);
@@ -223,7 +306,19 @@ int main(int argc, char** argv){
 
 	lseek(output_fd, 0, SEEK_SET);
 	write_headers(output_fd, fmt, samples, strtoul(argv[4], NULL, 10));
-	//TODO normalize floats
+	
+	//floating point pcm needs to be normalized...
+	if(fmt == fmt_f32){
+		float* normalized = float_reference(output_fd, samples);
+		lseek(output_fd, 0, SEEK_SET);
+		write_headers(output_fd, fmt, samples, strtoul(argv[4], NULL, 10));
+		for(size_t n = 0; n < samples; n++){
+			write(output_fd, normalized + n, 4);
+			//fprintf(stdout, "Normalized sample %f\n", normalized[n]);
+		}
+		free(normalized);
+	}
+	
 	close(output_fd);
 	return EXIT_SUCCESS;
 }
