@@ -213,6 +213,7 @@ static size_t process(FILE* src, size_t column, sample_format fmt, int dst){
 		samples++;
 	}
 
+	free(line);
 	return samples;
 }
 
@@ -318,7 +319,7 @@ int main(int argc, char** argv){
 		}
 		free(normalized);
 	}
-	
+
 	close(output_fd);
 	return EXIT_SUCCESS;
 }
