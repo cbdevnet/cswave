@@ -1,6 +1,6 @@
 CFLAGS = -g -Wall -Wpedantic
 
-all: cswave cswave.exe
+all: cswave
 
 cswave: cswave.c
 

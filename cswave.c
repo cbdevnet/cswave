@@ -13,7 +13,6 @@
 #ifdef _WIN32
 	#define WIN32_LEAN_AND_MEAN
 	#include <windows.h>
-	#include <winsock2.h>
 	#define PRIsize_t "Iu"
 	#define htole16(x) (x)
 	#define htole32(x) (x)
@@ -122,7 +121,8 @@ typedef struct /*_chunk_data*/ {
 
 static int usage(char* fn){
 	fprintf(stdout, "Call as %s <file.csv> <file.wav> <column> <samplerate> [<format>]\n", fn);
-	fprintf(stdout, "Possible formats: i8, i16 (default), i32, f32");
+	fprintf(stdout, "Supported wave formats: i8, i16 (default), i32, f32\n");
+	fprintf(stdout, "Note that when using integer output formats, floating point input samples will be truncated to their integer parts\n");
 	return EXIT_FAILURE;
 }
 
