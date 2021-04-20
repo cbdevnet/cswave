@@ -196,11 +196,13 @@ static void push_sample(sample_t sample, sample_format fmt, int fd){
 static size_t process(FILE* src, size_t column, sample_format fmt, int dst, char delimiter){
 	char* line, *value;
 	size_t offset = 0;
-	size_t bytes_alloc = 0, samples = 0;
+	size_t bytes_alloc = 0, samples = 0, rows = 0;
 	ssize_t bytes_read = 0;
 	sample_t sample;
 
 	for(bytes_read = getline(&line, &bytes_alloc, src); bytes_read >= 0; bytes_read = getline(&line, &bytes_alloc, src)){
+		rows++;
+
 		offset = 0;
 		for(value = line; *value; value++){
 			if(offset == column){
@@ -213,7 +215,7 @@ static size_t process(FILE* src, size_t column, sample_format fmt, int dst, char
 		}
 
 		if(!*value || iscntrl(*value)){
-			fprintf(stderr, "Input row %" PRIsize_t " does not provide a sample column\n", samples);
+			fprintf(stderr, "Input row %" PRIsize_t " does not provide a sample column\n", rows);
 			continue;
 		}
 
@@ -236,7 +238,9 @@ static float* float_reference(int fd, size_t samples){
 	ssize_t bytes = 0, current_read = 0;
 
 	//read entire file
-	for(current_read = read(fd, data, samples * sizeof(float)); bytes != samples * sizeof(float);  current_read = read(fd, ((uint8_t*)(data)) + bytes, (samples * sizeof(float)) - bytes)){
+	for(current_read = read(fd, data, samples * sizeof(float));
+			bytes != samples * sizeof(float);
+			current_read = read(fd, ((uint8_t*)(data)) + bytes, (samples * sizeof(float)) - bytes)){
 		if(current_read <= 0){
 			fprintf(stderr, "Failed to read back raw data\n");
 			free(data);
