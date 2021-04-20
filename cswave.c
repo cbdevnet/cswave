@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <math.h>
+#include <ctype.h>
 
 #define VERSION "0.2"
 
@@ -211,7 +212,7 @@ static size_t process(FILE* src, size_t column, sample_format fmt, int dst, char
 			}
 		}
 
-		if(!*value){
+		if(!*value || iscntrl(*value)){
 			fprintf(stderr, "Input row %" PRIsize_t " does not provide a sample column\n", samples);
 			continue;
 		}
@@ -331,6 +332,10 @@ int main(int argc, char** argv){
 		return EXIT_FAILURE;
 	}
 
+	#ifdef _WIN32
+	//windows does some sort of line-ending conversion thingy unless you convince it otherwise...
+	_fmode = _O_BINARY;
+	#endif
 	int output_fd = open(argv[2], O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 	if(output_fd < 0){
 		fprintf(stderr, "Failed to open output file %s\n", argv[2]);
