@@ -1,4 +1,4 @@
-CFLAGS = -g -Wall -Wpedantic
+CFLAGS = -Wall -Wpedantic
 
 all: cswave
 

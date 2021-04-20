@@ -10,6 +10,8 @@
 #include <inttypes.h>
 #include <math.h>
 
+#define VERSION "0.2"
+
 #ifdef _WIN32
 	#define WIN32_LEAN_AND_MEAN
 	#include <windows.h>
@@ -78,7 +80,8 @@ typedef enum {
 	fmt_i8,
 	fmt_i16,
 	fmt_i32,
-	fmt_f32
+	fmt_f32,
+	fmt_nf32
 } sample_format;
 
 typedef struct {
@@ -117,12 +120,12 @@ typedef struct /*_chunk_data*/ {
 } hdr_data_t;
 #pragma pack(pop)
 
-//TODO configurable csv delimiter
-
 static int usage(char* fn){
-	fprintf(stdout, "Call as %s <file.csv> <file.wav> <column> <samplerate> [<format>]\n", fn);
-	fprintf(stdout, "Supported wave formats: i8, i16 (default), i32, f32\n");
-	fprintf(stdout, "Note that when using integer output formats, floating point input samples will be truncated to their integer parts\n");
+	fprintf(stdout, "cswave " VERSION " - Convert CSV columns to WAVE files\n");
+	fprintf(stdout, "\tUsage: %s <file.csv> <file.wav> <column> <samplerate> [<format>] [<delimiter>]\n\n", fn);
+	fprintf(stdout, "Supported wave formats: i8, i16 (default), i32, f32, nf32\n");
+	fprintf(stdout, "When using integer output formats, floating point input samples will be truncated to their integer parts.\n");
+	fprintf(stdout, "The nf32 format will store samples as float32 values without normalization.\n");
 	return EXIT_FAILURE;
 }
 
@@ -143,6 +146,10 @@ static sample_format sampleformat_parse(char* fmt){
 		return fmt_f32;
 	}
 
+	else if(!strcmp(fmt, "nf32")){
+		return fmt_nf32;
+	}
+
 	return fmt_i16;
 }
 
@@ -154,6 +161,7 @@ static size_t sampleformat_bits(sample_format fmt){
 			return 16;
 		case fmt_i32:
 		case fmt_f32:
+		case fmt_nf32:
 			return 32;	
 	}
 
@@ -176,12 +184,15 @@ static void push_sample(sample_t sample, sample_format fmt, int fd){
 			write(fd, &i32, 4);
 			break;
 		case fmt_f32:
-			write(fd, &sample.f32, 4);
+		case fmt_nf32:
+			if(write(fd, &sample.f32, 4) != 4){
+				fprintf(stderr, "Failed to write\n");
+			}
 			break;
 	}
 }
 
-static size_t process(FILE* src, size_t column, sample_format fmt, int dst){
+static size_t process(FILE* src, size_t column, sample_format fmt, int dst, char delimiter){
 	char* line, *value;
 	size_t offset = 0;
 	size_t bytes_alloc = 0, samples = 0;
@@ -195,7 +206,7 @@ static size_t process(FILE* src, size_t column, sample_format fmt, int dst){
 				break;
 			}
 
-			if(*value == ','){
+			if(*value == delimiter){
 				offset++;
 			}
 		}
@@ -208,6 +219,7 @@ static size_t process(FILE* src, size_t column, sample_format fmt, int dst){
 		sample.i64 = strtoll(value, NULL, 0);
 		sample.f32 = strtof(value, NULL);
 
+		//fprintf(stderr, "Original sample %d, value %f\n", samples, sample.f32);
 		push_sample(sample, fmt, dst);
 
 		samples++;
@@ -219,16 +231,31 @@ static size_t process(FILE* src, size_t column, sample_format fmt, int dst){
 
 static float* float_reference(int fd, size_t samples){
 	float* data = calloc(samples, sizeof(float)), max = 0;
-	size_t n = 0;
+	size_t n = 0, nmax = 0;
+	ssize_t bytes = 0, current_read = 0;
+
+	//read entire file
+	for(current_read = read(fd, data, samples * sizeof(float)); bytes != samples * sizeof(float);  current_read = read(fd, ((uint8_t*)(data)) + bytes, (samples * sizeof(float)) - bytes)){
+		if(current_read <= 0){
+			fprintf(stderr, "Failed to read back raw data\n");
+			free(data);
+			return NULL;
+		}
+
+		bytes += current_read;
+		fprintf(stdout, "Readback progress %" PRIsize_t " of %" PRIsize_t " bytes\n", bytes, samples * sizeof(float));
+	}
+	
 
 	for(n = 0; n < samples; n++){
-		read(fd, data + n, 4);
+		//fprintf(stderr, "Readback sample %d, value %f\n", n, data[n]);
 		if(fabsf(data[n]) > fabsf(max)){
 			max = data[n];
+			nmax = n;
 		}
 	}
 
-	fprintf(stdout, "Determined maximum sample value as %f\n", max);
+	fprintf(stdout, "Determined maximum sample value as %f (sample %" PRIsize_t ")\n", max, nmax);
 
 	for(n = 0; n < samples; n++){
 		data[n] /= fabsf(max);
@@ -280,11 +307,23 @@ static void write_headers(int fd, sample_format fmt, size_t samples, size_t samp
 }
 
 int main(int argc, char** argv){
+	int normalize = 1;
+	char delimiter = ',';
+	ssize_t bytes_written = 0, current = 0;
+
 	if(argc < 5){
 		return usage(argv[0]);
 	}
 
+	if(argc == 7){
+		delimiter = argv[6][0];
+	}
+
 	sample_format fmt = sampleformat_parse(argv[5]);
+	if(fmt == fmt_nf32){
+		fmt = fmt_f32;
+		normalize = 0;
+	}
 
 	FILE* in = fopen(argv[1], "r");
 	if(!in){
@@ -300,22 +339,30 @@ int main(int argc, char** argv){
 	}
 
 	write_headers(output_fd, fmt, 0, strtoul(argv[4], NULL, 10));
-	size_t samples = process(in, strtoul(argv[3], NULL, 10), fmt, output_fd);
+	size_t samples = process(in, strtoul(argv[3], NULL, 10), fmt, output_fd, delimiter);
 	fclose(in);
 
 	fprintf(stdout, "Finalizing output file (%" PRIsize_t " samples)\n", samples);
 
 	lseek(output_fd, 0, SEEK_SET);
 	write_headers(output_fd, fmt, samples, strtoul(argv[4], NULL, 10));
-	
+
 	//floating point pcm needs to be normalized...
-	if(fmt == fmt_f32){
+	if(fmt == fmt_f32 && normalize){
 		float* normalized = float_reference(output_fd, samples);
+		if(!normalized){
+			close(output_fd);
+			return EXIT_FAILURE;
+		}
+
 		lseek(output_fd, 0, SEEK_SET);
 		write_headers(output_fd, fmt, samples, strtoul(argv[4], NULL, 10));
-		for(size_t n = 0; n < samples; n++){
-			write(output_fd, normalized + n, 4);
-			//fprintf(stdout, "Normalized sample %f\n", normalized[n]);
+
+		for(current = write(output_fd, normalized, samples * sizeof(float));
+				bytes_written < samples * sizeof(float);
+				current = write(output_fd, ((uint8_t*) normalized) + bytes_written, (samples * sizeof(float) - bytes_written))){
+			bytes_written += current;
+			fprintf(stdout, "Normalized write progress %" PRIsize_t " of %" PRIsize_t " bytes\n", bytes_written, samples * sizeof(float));
 		}
 		free(normalized);
 	}
